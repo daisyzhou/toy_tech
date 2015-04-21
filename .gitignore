@@ -2,3 +2,4 @@
 **/__pycache__
 input/dota/local_config.py
 
+redis-3.0.0/
