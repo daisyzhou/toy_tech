@@ -1,6 +1,10 @@
 __author__ = 'daisy'
 
 import dota.local_config
+
+import boto.sqs
+import boto.sqs.message
+
 import http.client
 import json
 import threading
@@ -23,15 +27,20 @@ class Streamer:
 
     def start(self, poll_interval=500):
         """
-        Starts the Streamer; may not be started if it has already started.
+        Starts the Streamer; may not be started if it is already running.
         :param poll_interval: Number of milliseconds after which to poll for new
           matches.  Default is 500.  Valve suggests rate limiting within
           applications to at most one request per second.
         :return:
         """
-        self.poll_interval = poll_interval / 1000
         self.running = True
+        self._aws_conn = boto.sqs.connect_to_region(
+            "us-west-1",
+            aws_access_key_id=dota.local_config.AWSAccessKeyId,
+            aws_secret_access_key=dota.local_config.AWSSecretKey)
+        self._queue = self._aws_conn.get_queue("dota_match_ids")
         self._connection = http.client.HTTPConnection("api.steampowered.com")
+        self.poll_interval = poll_interval / 1000
         self._poll_thread = threading.Thread(target=self._poll_continuously)
         self._poll_thread.start()
 
@@ -43,6 +52,7 @@ class Streamer:
         self.running = False
         self._poll_thread.join()
         self._connection.close()
+        self._aws_conn.close()
 
     def _poll_continuously(self):
         """
@@ -68,12 +78,26 @@ class Streamer:
             )
             response = self._connection.getresponse()
             match_history = json.loads(response.read().decode("utf-8"))
-            matches = match_history["result"]["matches"]
+            json_matches = match_history["result"]["matches"]
             self._most_recent_streamed_match = \
-                matches[len(matches) - 1]["match_seq_num"]
+                json_matches[len(json_matches) - 1]["match_seq_num"]
             # TODO remove print
-            print("first: {n}".format(n=matches[0]["match_seq_num"]))
+            print("first: {n}".format(n=json_matches[0]["match_seq_num"]))
             print("last:  {n}".format(n=self._most_recent_streamed_match))
+
+            match_ids = [m["match_id"] for m in json_matches]
+
+            # Batch the match_ids into batches of 10 to send to SQS
+            i = 0
+            while i < len(match_ids):
+                j = 0
+                messages = []
+                while (j < 10) and (j + i < len(match_ids)):
+                    m_id = match_ids[i+j]
+                    messages.append((m_id, m_id, 0))
+                    j += 1
+                self._queue.write_batch(messages)
+                i += j + 1
             time.sleep(self.poll_interval)
 
     def _get_recent_match_seq_num(self):
