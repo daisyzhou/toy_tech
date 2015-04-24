@@ -19,3 +19,12 @@ Also requires boto installed:
     # Install boto (Amazon SQS SDK)
     pip install boto
 
+Telegram components:
+dead-end:
+* https://github.com/griganton/telepy
+* pip install pycrypto
+
+currently pursuing:
+* follow installation instructions at:
+  https://github.com/efaisal/pytg#installation
+* file telegram/tg.pub containing the telegram public key

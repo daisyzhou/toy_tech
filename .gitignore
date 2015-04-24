@@ -1,5 +1,7 @@
 .idea/
 **/__pycache__
+
 input/dota/local_config.py
+itelegram/tg.pub
 
 redis-3.0.0/
