@@ -1,5 +1,6 @@
 .idea/
 **/__pycache__
-input/dota/local_config.py
+dotainput/local_config.py
+**/local_config.py
 
 redis-3.0.0/
