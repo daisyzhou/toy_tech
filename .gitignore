@@ -4,3 +4,5 @@ dotainput/local_config.py
 **/local_config.py
 
 redis-3.0.0/
+
+**/dz_desktop.pem
