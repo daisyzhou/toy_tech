@@ -111,10 +111,8 @@ def process_queue():
 # Main functionality (this should go in a main method ...)
 processing_thread_1 = threading.Thread(target=process_queue)
 processing_thread_2 = threading.Thread(target=process_queue)
-processing_thread_3 = threading.Thread(target=process_queue)
 server_thread = threading.Thread(target=listen_and_reply)
 
 server_thread.start()
 processing_thread_1.start()
 processing_thread_2.start()
-processing_thread_3.start()
