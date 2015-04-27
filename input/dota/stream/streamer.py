@@ -39,7 +39,10 @@ class Streamer:
             aws_access_key_id=dota.local_config.AWSAccessKeyId,
             aws_secret_access_key=dota.local_config.AWSSecretKey)
         self._queue = self._aws_conn.get_queue("dota_match_ids")
-        self._connection = http.client.HTTPConnection("api.steampowered.com")
+        self._connection = http.client.HTTPConnection(
+            "api.steampowered.com",
+            timeout=5
+        )
         self.poll_interval = poll_interval / 1000
         self._poll_thread = threading.Thread(target=self._poll_continuously)
         self._poll_thread.start()
@@ -62,7 +65,6 @@ class Streamer:
         Relies on time.sleep to poll, so may fall behind if processing takes too
         long.
         """
-        # TODO add logic to start at the last requested match; etc.
         while self.running:
             if self._most_recent_streamed_match is None:
                 self._most_recent_streamed_match = \
@@ -79,8 +81,10 @@ class Streamer:
             response = self._connection.getresponse()
             match_history = json.loads(response.read().decode("utf-8"))
             json_matches = match_history["result"]["matches"]
+            if len(json_matches) == 0:
+                continue
             self._most_recent_streamed_match = \
-                json_matches[len(json_matches) - 1]["match_seq_num"]
+                json_matches[-1]["match_seq_num"]
             # TODO remove print
             print("first: {n}".format(n=json_matches[0]["match_seq_num"]))
             print("last:  {n}".format(n=self._most_recent_streamed_match))
