@@ -73,7 +73,6 @@ sqs_queue = aws_conn.get_queue("dota_match_ids")
 def process_queue():
     while True:
         match_messages = sqs_queue.get_messages(10)
-        print("Processing messages: %s" % str(match_messages))
         messages = []
         for match_message in match_messages:
             try:

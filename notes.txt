@@ -1,0 +1,28 @@
+# Notes from trying to run on ec2 instance.
+
+export PATH=$PATH:$HOME/Telegram/
+export PYTHONPATH=$PWD/toy_tech/
+sudo apt-get install python3-pip
+sudo pip3 install boto
+
+sudo apt-get install uuid-dev
+curl https://github.com/downloads/Neopallium/lua-zmq/luajit2.0_beta11_zmq2.2_llthreads.zip -o luajit2.0_beta11_zmq2.2_llthreads.zip
+
+curl http://download.zeromq.org/zeromq-2.1.4.tar.gz -o zeromq-2.1.4.tar.gz
+tar xf zeromq-2.1.4.tar.gz
+cd zeromq-2.1.4
+./configure
+make
+sudo make install
+
+cd
+wget http://luarocks.org/releases/luarocks-2.1.4.tar.gz
+tar zxpf luarocks-2.1.4.tar.gz
+cd luarocks-2.1.4
+./configure; sudo make bootstrap
+
+sudo luarocks install lua-zmq
+
+sudo pip3 install pyzmq
+
+sudo apt-get install libreadline-dev libconfig-dev libssl-dev lua5.2 liblua5.2-dev libevent-dev make unzip git

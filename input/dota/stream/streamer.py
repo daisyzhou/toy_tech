@@ -85,9 +85,12 @@ class Streamer:
                 continue
             self._most_recent_streamed_match = \
                 json_matches[-1]["match_seq_num"]
+<<<<<<< HEAD:input/dota/stream/streamer.py
             # TODO remove print
             print("first: {n}".format(n=json_matches[0]["match_seq_num"]))
             print("last:  {n}".format(n=self._most_recent_streamed_match))
+=======
+>>>>>>> af96c8f... Attempting to run for real:dotainput/stream/streamer.py
 
             match_ids = [m["match_id"] for m in json_matches]
 
