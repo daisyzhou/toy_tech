@@ -1,6 +1,6 @@
 __author__ = 'daisy'
 
-import dota.local_config
+import dotainput.local_config
 
 import boto.sqs
 import boto.sqs.message
@@ -25,7 +25,7 @@ class Streamer:
         self.running = False
         self._most_recent_streamed_match = None
 
-    def start(self, poll_interval=1000):
+    def start(self, poll_interval=500):
         """
         Starts the Streamer; may not be started if it is already running.
         :param poll_interval: Number of milliseconds after which to poll for new
@@ -36,13 +36,11 @@ class Streamer:
         self.running = True
         self._aws_conn = boto.sqs.connect_to_region(
             "us-west-1",
-            aws_access_key_id=dota.local_config.AWSAccessKeyId,
-            aws_secret_access_key=dota.local_config.AWSSecretKey)
+            aws_access_key_id=dotainput.local_config.AWSAccessKeyId,
+            aws_secret_access_key=dotainput.local_config.AWSSecretKey)
         self._queue = self._aws_conn.get_queue("dota_match_ids")
-        self._connection = http.client.HTTPConnection(
-            "api.steampowered.com",
-            timeout=5 
-        )
+        self._connection = self._create_steamapi_connection()
+        self._connection.set_debuglevel(1)  # TODO remove
         self.poll_interval = poll_interval / 1000
         self._poll_thread = threading.Thread(target=self._poll_continuously)
         self._poll_thread.start()
@@ -74,34 +72,45 @@ class Streamer:
                 "/IDOTA2Match_570/GetMatchHistoryBySequenceNum/V001/"
                 "?key={key}&start_at_match_seq_num={match_seq_num}"
                 .format(
-                    key=dota.local_config.DOTA2_API_KEY,
+                    key=dotainput.local_config.DOTA2_API_KEY,
                     match_seq_num=self._most_recent_streamed_match + 1
                 )
             )
-            response = self._connection.getresponse()
-            match_history = json.loads(response.read().decode("utf-8"))
+            try:
+                response = self._connection.getresponse().read()
+            except http.client.BadStatusLine:
+                print("Received empty response (BadStatusLine), "
+                      "waiting & continuing...")
+                self._connection.close()
+                self._connection.connect()
+                time.sleep(self.poll_interval)
+                continue
+
+            match_history = json.loads(response.decode("utf-8"))
+            if "matches" not in match_history["result"]:
+                # Reached end for now.
+                print("No new matches, continuing ...")
+                time.sleep(self.poll_interval)
+                continue
+
             json_matches = match_history["result"]["matches"]
             if len(json_matches) == 0:
+                print("No matches in 'matches' field of result, this is "
+                      "unexpected.")
                 continue
             self._most_recent_streamed_match = \
                 json_matches[-1]["match_seq_num"]
-<<<<<<< HEAD:input/dota/stream/streamer.py
-            # TODO remove print
-            print("first: {n}".format(n=json_matches[0]["match_seq_num"]))
-            print("last:  {n}".format(n=self._most_recent_streamed_match))
-=======
->>>>>>> af96c8f... Attempting to run for real:dotainput/stream/streamer.py
 
             match_ids = [m["match_id"] for m in json_matches]
 
-            # Batch the match_ids into batches of 10 to send to SQS
+            # Batch the matches into batches of 10 to send to SQS
             i = 0
-            while i < len(match_ids):
+            while i < len(json_matches):
                 j = 0
                 messages = []
                 while (j < 10) and (j + i < len(match_ids)):
-                    m_id = match_ids[i+j]
-                    messages.append((m_id, m_id, 0))
+                    match = json_matches[i + j]
+                    messages.append((match["match_id"], json.dumps(match), 0))
                     j += 1
                 self._queue.write_batch(messages)
                 i += j + 1
@@ -117,9 +126,16 @@ class Streamer:
             "?key={key}"
             "&matches_requested=1"
             .format(
-                key=dota.local_config.DOTA2_API_KEY
+                key=dotainput.local_config.DOTA2_API_KEY
             )
         )
         response = self._connection.getresponse()
         decoded = json.loads(response.read().decode("utf-8"))
+        time.sleep(self.poll_interval)  # Rate limit for the API
         return decoded["result"]["matches"][-1]["match_seq_num"]
+
+    def _create_steamapi_connection(self):
+        return http.client.HTTPConnection(
+            "api.steampowered.com",
+            timeout=10
+        )
