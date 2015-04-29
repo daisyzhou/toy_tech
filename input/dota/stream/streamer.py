@@ -25,7 +25,7 @@ class Streamer:
         self.running = False
         self._most_recent_streamed_match = None
 
-    def start(self, poll_interval=500):
+    def start(self, poll_interval=1000):
         """
         Starts the Streamer; may not be started if it is already running.
         :param poll_interval: Number of milliseconds after which to poll for new
@@ -41,7 +41,7 @@ class Streamer:
         self._queue = self._aws_conn.get_queue("dota_match_ids")
         self._connection = http.client.HTTPConnection(
             "api.steampowered.com",
-            timeout=5
+            timeout=5 
         )
         self.poll_interval = poll_interval / 1000
         self._poll_thread = threading.Thread(target=self._poll_continuously)

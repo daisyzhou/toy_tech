@@ -19,3 +19,10 @@ Also requires boto installed:
     # Install boto (Amazon SQS SDK)
     pip install boto
 
+luarocks:
+
+    sudo apt-get install luarocks
+
+luasocket:
+
+    sudo luarocks install luasocket

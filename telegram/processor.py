@@ -9,14 +9,13 @@
 #   * generates the messages that need to be sent, and whenever the client
 #     polls, concatenates them if there are more than one, and sends it back to
 #     the client.
-import http
+import http.server
 import json
 import threading
 
 import dotainput.local_config
 
 import boto.sqs
-import zmq
 
 # TODO make these not global (encapsulate this into a class)
 # Variables that need to be accessed across threads:
@@ -35,30 +34,39 @@ msg_lock = threading.Lock()
 next_msg = None
 
 
-# Set up server to zmq (client is LUA Telegram plugin)
-context = zmq.Context()
-socket = context.socket(zmq.REP)
-socket.bind("tcp://*:5555")
+# Set up server for the LUA Telegram plugin
+class BotHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        print("Received GET: %s" % self.path)
+        if self.path == "/telegram-poll":
+            #  Send reply back to client
+            global msg_lock
+            global next_msg
+            msg_lock.acquire()
+            if next_msg is not None:
+                self._send_text(next_msg)
+            else:
+                self._send_text("NONE")
+            print("Sent response: %s" % next_msg)
+            next_msg = None
+            msg_lock.release()
+        else:
+            self._send_text("HTTP path not recognized: %s" % self.path)
+
+    def _send_text(self, text):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(bytes(text, encoding="utf-8"))
+
+
+server_address = ('', 8000)
+httpd = http.server.HTTPServer(server_address, BotHandler)
 
 
 # Loop that listens for client.
 def listen_and_reply():
-    while True:
-        #  Wait for next request from client
-        message = socket.recv()
-        print("Received request: %s" % message)
-
-        #  Send reply back to client
-        global msg_lock
-        global next_msg
-        msg_lock.acquire()
-        if next_msg is not None:
-            socket.send_string(next_msg)
-        else:
-            socket.send_string("NONE")
-        print("Sent response: %s" % next_msg)
-        next_msg = None
-        msg_lock.release()
+    httpd.serve_forever()
 
 
 # Set up SQS connection
