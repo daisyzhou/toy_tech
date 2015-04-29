@@ -24,10 +24,15 @@ account_ids = {
     76561197997336439,  # dzbug
     76561198111698495,  # instapicking PL
     76561198159705679,  # dz's unranked smurf
-    71754942,  # random TODO remove
-    76561198101955961,
-    76561198043613137,
-    76561198038807629,
+    76561198189446861,  # fox (Paul's smurf)
+    76561198143189634,  # Allen's smurf
+    76561197961774985,  # Franklin
+    76561197979611387,  # Sidd
+    76561197970342819,  # Aaron
+    76561197993621342,  # Gilbert (Sloth)
+    53128102,           # RD
+    76561197999544403,  # Hellfire
+    74208069,           # lutz
 }
 # YOU NEED TO ACQUIRE THE LOCK msg_lock BEFORE READING OR MODIFYING next_msg.
 msg_lock = threading.Lock()
