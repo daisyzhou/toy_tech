@@ -7,6 +7,7 @@ import boto.sqs.message
 
 import http.client
 import json
+import socket
 import threading
 import time
 
@@ -80,6 +81,13 @@ class Streamer:
                 response = self._connection.getresponse().read()
             except http.client.BadStatusLine:
                 print("Received empty response (BadStatusLine), "
+                      "waiting & continuing...")
+                self._connection.close()
+                self._connection.connect()
+                time.sleep(self.poll_interval)
+                continue
+            except socket.timeout:
+                print("Connection timed out, "
                       "waiting & continuing...")
                 self._connection.close()
                 self._connection.connect()
