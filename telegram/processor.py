@@ -33,6 +33,7 @@ account_ids = {
     53128102,           # RD
     76561197999544403,  # Hellfire
     74208069,           # lutz
+    76561198168192504,  # Gilbert's smurf (vvx)
 }
 # YOU NEED TO ACQUIRE THE LOCK msg_lock BEFORE READING OR MODIFYING next_msg.
 msg_lock = threading.Lock()
@@ -55,8 +56,8 @@ class BotHandler(http.server.BaseHTTPRequestHandler):
             print("Sent response: %s" % next_msg)
             next_msg = None
             msg_lock.release()
-        else:
-            self._send_text("HTTP path not recognized: %s" % self.path)
+        if self.path == "/telegram-latest":
+            self._send_text("queued messages: %s" % next_msg)
 
     def _send_text(self, text):
         self.send_response(200)
@@ -105,6 +106,7 @@ def process_queue():
                                     match=match["match_id"]
                                 )
                         )
+                    print("Found interesting game: %s" % message)
                     messages.append(message)
                 sqs_queue.delete_message(match_message)
             except Exception:
