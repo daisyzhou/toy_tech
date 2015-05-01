@@ -13,8 +13,8 @@
 import http.server
 import json
 import logging
+import re
 import threading
-import traceback
 
 import dotainput.local_config
 import dotainput.stream.streamer
@@ -33,7 +33,7 @@ logging.basicConfig(
 # TODO make these not global (encapsulate this into a class)
 # Variables that need to be accessed across threads:
 # Accounts of people we care about
-account_ids_64_bit = {
+default_account_ids_64bit = {
     76561197997336439,  # dzbug
     76561198111698495,  # instapicking PL
     76561198159705679,  # dz's unranked smurf
@@ -51,7 +51,7 @@ account_ids_64_bit = {
 
 
 # Map of 32-bit to 64-bit account IDs
-account_lookup = dict((4294967295 & a, a) for a in account_ids_64_bit)
+account_lookup = dict((4294967295 & a, a) for a in default_account_ids_64bit)
 
 
 # YOU NEED TO ACQUIRE THE LOCK msg_lock BEFORE READING OR MODIFYING next_msg.
@@ -67,6 +67,10 @@ steam_conn = dotainput.stream.streamer.Streamer.create_steamapi_connection()
 # Set up server for the LUA Telegram plugin
 class BotHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        addplayers_re = re.compile("/telegram-addplayer\?id_64=(\d+)")
+        removeplayers_re = re.compile(
+            "/telegram-removeplayer\?id_64=(\d+)"
+        )
         if self.path == "/telegram-poll":
             #  Send reply back to client
             global msg_lock
@@ -80,8 +84,25 @@ class BotHandler(http.server.BaseHTTPRequestHandler):
                 self._send_text("NONE")
             next_msg = None
             msg_lock.release()
-        if self.path == "/telegram-latest":
+        elif self.path == "/telegram-latest":
             self._send_text("queued messages: %s" % next_msg)
+        elif addplayers_re.match(self.path):
+            v = int(addplayers_re.match(self.path).group(1))
+            logging.info("adding player %s" % v)
+            k = 4294967295 & v
+            name = lookup_name(v)
+            account_lookup[k] = v
+            self._send_text("Added player: %s" % name)
+        elif removeplayers_re.match(self.path):
+            id_64 = int(removeplayers_re.match(self.path).group(1))
+            k = 4294967295 & id_64
+            account_lookup.pop(k, None)
+            self._send_text("Removed player: %s" % lookup_name(id_64))
+        elif self.path == "/telegram-listplayers":
+            player_names = [lookup_name(p) for p in account_lookup.values()]
+            self._send_text("Tracked players:\n%s" % "\n".join(player_names))
+        else:
+            self._send_text("Unknown path: %s" % self.path)
 
     def _send_text(self, text):
         self.send_response(200)
@@ -144,7 +165,6 @@ def process_queue():
                 logging.error("Match ID %s caused exception %s" %
                               (str(match_message.get_body()),
                                str(e)))
-                traceback.print_last()
         if len(messages) != 0:
             global next_msg
             global msg_lock
@@ -158,6 +178,7 @@ def process_queue():
 
 def lookup_name(aid_64):
     conn_lock.acquire()
+    global steam_conn
     steam_conn.request(
         "GET",
         "/ISteamUser/GetPlayerSummaries/v0002"
@@ -176,8 +197,9 @@ def lookup_name(aid_64):
     except Exception as err:
         logging.error("Got an error when looking up name for %s. Error: %s" %
                       (aid_64, str(err)))
-        traceback.print_last()
         conn_lock.release()
+        steam_conn = \
+            dotainput.stream.streamer.Streamer.create_steamapi_connection()
         return "Player number: %s" % aid_64
 
 

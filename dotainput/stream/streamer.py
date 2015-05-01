@@ -95,7 +95,14 @@ class Streamer:
                 time.sleep(self.poll_interval)
                 continue
 
-            match_history = json.loads(response.decode("utf-8"))
+            try:
+                match_history = json.loads(response.decode("utf-8"))
+            except ValueError as e:
+                logging.error(
+                    "Error while decoding JSON response: %s. Error:\n%s"
+                    % (response, e)
+                )
+                continue
             if "matches" not in match_history["result"]:
                 # Reached end for now.
                 logging.info("No new matches, continuing ...")
