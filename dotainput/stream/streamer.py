@@ -7,6 +7,7 @@ import boto.sqs.message
 
 import http.client
 import json
+import logging
 import socket
 import threading
 import time
@@ -40,6 +41,7 @@ class Streamer:
             aws_access_key_id=dotainput.local_config.AWSAccessKeyId,
             aws_secret_access_key=dotainput.local_config.AWSSecretKey)
         self._queue = self._aws_conn.get_queue("dota_match_ids")
+        self._queue.set_message_class(boto.sqs.message.RawMessage)
         self._connection = self.create_steamapi_connection()
         self.poll_interval = poll_interval / 1000
         self._poll_thread = threading.Thread(target=self._poll_continuously)
@@ -79,14 +81,14 @@ class Streamer:
             try:
                 response = self._connection.getresponse().read()
             except http.client.BadStatusLine:
-                print("Received empty response (BadStatusLine), "
+                logging.info("Received empty response (BadStatusLine), "
                       "waiting & continuing...")
                 self._connection.close()
                 self._connection.connect()
                 time.sleep(self.poll_interval)
                 continue
             except socket.timeout:
-                print("Connection timed out, "
+                logging.info("Connection timed out, "
                       "waiting & continuing...")
                 self._connection.close()
                 self._connection.connect()
@@ -96,14 +98,15 @@ class Streamer:
             match_history = json.loads(response.decode("utf-8"))
             if "matches" not in match_history["result"]:
                 # Reached end for now.
-                print("No new matches, continuing ...")
+                logging.info("No new matches, continuing ...")
                 time.sleep(self.poll_interval)
                 continue
 
             json_matches = match_history["result"]["matches"]
             if len(json_matches) == 0:
-                print("No matches in 'matches' field of result, this is "
-                      "unexpected.")
+                logging.warning("No matches in 'matches' field of result, this "
+                                "is unexpected. json received was:\n%s" %
+                                match_history)
                 continue
             self._most_recent_streamed_match = \
                 json_matches[-1]["match_seq_num"]

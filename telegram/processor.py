@@ -9,8 +9,10 @@
 #   * generates the messages that need to be sent, and whenever the client
 #     polls, concatenates them if there are more than one, and sends it back to
 #     the client.
+
 import http.server
 import json
+import logging
 import threading
 import traceback
 
@@ -18,6 +20,15 @@ import dotainput.local_config
 import dotainput.stream.streamer
 
 import boto.sqs
+import boto.sqs.message
+
+
+logging.basicConfig(
+    filename='processor.log',
+    level=logging.INFO,
+    format='%(asctime)s %(message)s'
+)
+
 
 # TODO make these not global (encapsulate this into a class)
 # Variables that need to be accessed across threads:
@@ -62,9 +73,10 @@ class BotHandler(http.server.BaseHTTPRequestHandler):
             global next_msg
             msg_lock.acquire()
             if next_msg is not None:
-                print("Sending response: %s" % next_msg)
+                logging.info("Sending response: %s" % next_msg)
                 self._send_text(next_msg)
             else:
+                logging.debug("Sending response: %s" % next_msg)
                 self._send_text("NONE")
             next_msg = None
             msg_lock.release()
@@ -93,6 +105,7 @@ aws_conn = boto.sqs.connect_to_region(
     aws_access_key_id=dotainput.local_config.AWSAccessKeyId,
     aws_secret_access_key=dotainput.local_config.AWSSecretKey)
 sqs_queue = aws_conn.get_queue("dota_match_ids")
+sqs_queue.set_message_class(boto.sqs.message.RawMessage)
 
 
 # Loop that processes match IDs from SQS
@@ -124,11 +137,13 @@ def process_queue():
                                         match=match["match_id"]
                                 )
                         )
-                    print("Found interesting game: %s" % message)
+                    logging.info("Found interesting game: %s" % message)
                     messages.append(message)
                 sqs_queue.delete_message(match_message)
             except Exception as e:
-                print("Match ID %s caused exception." % str(match_message.get_body()))
+                logging.error("Match ID %s caused exception %s" %
+                              (str(match_message.get_body()),
+                               str(e)))
                 traceback.print_last()
         if len(messages) != 0:
             global next_msg
@@ -159,7 +174,8 @@ def lookup_name(aid_64):
         conn_lock.release()
         return players[0]["personaname"]
     except Exception as err:
-        print("Got an error when looking up name for %s" % aid_64)
+        logging.error("Got an error when looking up name for %s. Error: %s" %
+                      (aid_64, str(err)))
         traceback.print_last()
         conn_lock.release()
         return "Player number: %s" % aid_64
