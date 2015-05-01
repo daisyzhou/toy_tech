@@ -54,17 +54,16 @@ steam_conn = dotainput.stream.streamer.Streamer.create_steamapi_connection()
 # Set up server for the LUA Telegram plugin
 class BotHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        print("Received GET: %s" % self.path)
         if self.path == "/telegram-poll":
             #  Send reply back to client
             global msg_lock
             global next_msg
             msg_lock.acquire()
             if next_msg is not None:
+                print("Sending response: %s" % next_msg)
                 self._send_text(next_msg)
             else:
                 self._send_text("NONE")
-            print("Sent response: %s" % next_msg)
             next_msg = None
             msg_lock.release()
         if self.path == "/telegram-latest":
@@ -128,6 +127,7 @@ def process_queue():
                 sqs_queue.delete_message(match_message)
             except Exception as e:
                 print("Match ID %s caused exception." % str(match_message.get_body()))
+                traceback.print_last()
         if len(messages) != 0:
             global next_msg
             global msg_lock
