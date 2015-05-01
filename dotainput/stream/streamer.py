@@ -40,7 +40,7 @@ class Streamer:
             aws_access_key_id=dotainput.local_config.AWSAccessKeyId,
             aws_secret_access_key=dotainput.local_config.AWSSecretKey)
         self._queue = self._aws_conn.get_queue("dota_match_ids")
-        self._connection = self._create_steamapi_connection()
+        self._connection = self.create_steamapi_connection()
         self.poll_interval = poll_interval / 1000
         self._poll_thread = threading.Thread(target=self._poll_continuously)
         self._poll_thread.start()
@@ -141,7 +141,8 @@ class Streamer:
         time.sleep(self.poll_interval)  # Rate limit for the API
         return decoded["result"]["matches"][-1]["match_seq_num"]
 
-    def _create_steamapi_connection(self):
+    @staticmethod
+    def create_steamapi_connection():
         return http.client.HTTPConnection(
             "api.steampowered.com",
             timeout=10

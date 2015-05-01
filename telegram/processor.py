@@ -12,15 +12,17 @@
 import http.server
 import json
 import threading
+import traceback
 
 import dotainput.local_config
+import dotainput.stream.streamer
 
 import boto.sqs
 
 # TODO make these not global (encapsulate this into a class)
 # Variables that need to be accessed across threads:
 # Accounts of people we care about
-account_ids = {
+account_ids_64_bit = {
     76561197997336439,  # dzbug
     76561198111698495,  # instapicking PL
     76561198159705679,  # dz's unranked smurf
@@ -30,14 +32,23 @@ account_ids = {
     76561197979611387,  # Sidd
     76561197970342819,  # Aaron
     76561197993621342,  # Gilbert (Sloth)
-    53128102,           # RD
+    76561198013393830,  # RD
     76561197999544403,  # Hellfire
-    74208069,           # lutz
+    76561198034473797,  # lutz
     76561198168192504,  # Gilbert's smurf (vvx)
 }
+
+
+# Map of 32-bit to 64-bit account IDs
+account_lookup = dict((4294967295 & a, a) for a in account_ids_64_bit)
+
+
 # YOU NEED TO ACQUIRE THE LOCK msg_lock BEFORE READING OR MODIFYING next_msg.
 msg_lock = threading.Lock()
 next_msg = None
+
+
+steam_conn = dotainput.stream.streamer.Streamer.create_steamapi_connection()
 
 
 # Set up server for the LUA Telegram plugin
@@ -96,20 +107,26 @@ def process_queue():
                     for player in match["players"]
                     if "account_id" in player # Bots have no account_id
                 ]
-                interesting_players = [p for p in players if p in account_ids]
+                interesting_players = [
+                    p for p in players if p in list(account_lookup.keys())
+                ]
                 if len(interesting_players) > 0:
+                    player_names = [
+                        lookup_name(account_lookup[aid_32])
+                        for aid_32 in interesting_players
+                    ]
                     message = "{players} just finished match {dotabuff_link}."\
                         .format(
-                            players=",".join(str(p) for p in interesting_players),
-                            dotabuff_link=
-                                "http://www.dotabuff.com/matches/{match}".format(
-                                    match=match["match_id"]
+                            players=",".join(str(p) for p in player_names),
+                            dotabuff_link="http://www.dotabuff.com/matches/"
+                                    "{match}".format(
+                                        match=match["match_id"]
                                 )
                         )
                     print("Found interesting game: %s" % message)
                     messages.append(message)
                 sqs_queue.delete_message(match_message)
-            except Exception:
+            except Exception as e:
                 print("Match ID %s caused exception." % str(match_message.get_body()))
         if len(messages) != 0:
             global next_msg
@@ -120,6 +137,27 @@ def process_queue():
             else:
                 next_msg = next_msg + "\n\n" + "\n\n".join(messages)
             msg_lock.release()
+
+
+def lookup_name(aid_64):
+    steam_conn.request(
+        "GET",
+        "/ISteamUser/GetPlayerSummaries/v0002"
+        "?key={key}&steamids={aid_64}".format(
+            key=dotainput.local_config.DOTA2_API_KEY,
+            aid_64=aid_64
+        )
+    )
+    try:
+        response = steam_conn.getresponse().read()
+        playerinfo = json.loads(response.decode("utf-8"))
+        players = playerinfo["response"]["players"]
+        assert len(players) == 1, "only requested one steam ID"
+        return players[0]["personaname"]
+    except Exception as err:
+        print("Got an error when looking up name for %s" % aid_64)
+        traceback.print_last()
+        return "Player number: %s" % aid_64
 
 
 # Main functionality (this should go in a main method ...)
