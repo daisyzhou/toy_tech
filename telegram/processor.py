@@ -48,6 +48,8 @@ msg_lock = threading.Lock()
 next_msg = None
 
 
+# Lock for steam_conn
+conn_lock = threading.Lock()
 steam_conn = dotainput.stream.streamer.Streamer.create_steamapi_connection()
 
 
@@ -140,6 +142,7 @@ def process_queue():
 
 
 def lookup_name(aid_64):
+    conn_lock.acquire()
     steam_conn.request(
         "GET",
         "/ISteamUser/GetPlayerSummaries/v0002"
@@ -153,10 +156,12 @@ def lookup_name(aid_64):
         playerinfo = json.loads(response.decode("utf-8"))
         players = playerinfo["response"]["players"]
         assert len(players) == 1, "only requested one steam ID"
+        conn_lock.release()
         return players[0]["personaname"]
     except Exception as err:
         print("Got an error when looking up name for %s" % aid_64)
         traceback.print_last()
+        conn_lock.release()
         return "Player number: %s" % aid_64
 
 
