@@ -47,6 +47,7 @@ default_account_ids_64bit = {
     76561197999544403,  # Hellfire
     76561198034473797,  # lutz
     76561198168192504,  # Gilbert's smurf (vvx)
+    76561197972444552,  # Angra
 }
 
 
@@ -71,38 +72,41 @@ class BotHandler(http.server.BaseHTTPRequestHandler):
         removeplayers_re = re.compile(
             "/telegram-removeplayer\?id_64=(\d+)"
         )
-        if self.path == "/telegram-poll":
-            #  Send reply back to client
-            global msg_lock
-            global next_msg
-            msg_lock.acquire()
-            if next_msg is not None:
-                logging.info("Sending response: %s" % next_msg)
-                self._send_text(next_msg)
+        try:
+            if self.path == "/telegram-poll":
+                #  Send reply back to client
+                global msg_lock
+                global next_msg
+                msg_lock.acquire()
+                if next_msg is not None:
+                    logging.info("Sending response: %s" % next_msg)
+                    self._send_text(next_msg)
+                else:
+                    logging.debug("Sending response: %s" % next_msg)
+                    self._send_text("NONE")
+                next_msg = None
+                msg_lock.release()
+            elif self.path == "/telegram-latest":
+                self._send_text("queued messages: %s" % next_msg)
+            elif addplayers_re.match(self.path):
+                v = int(addplayers_re.match(self.path).group(1))
+                logging.info("adding player %s" % v)
+                k = 4294967295 & v
+                name = lookup_name(v)
+                account_lookup[k] = v
+                self._send_text("Added player: %s" % name)
+            elif removeplayers_re.match(self.path):
+                id_64 = int(removeplayers_re.match(self.path).group(1))
+                k = 4294967295 & id_64
+                account_lookup.pop(k, None)
+                self._send_text("Removed player: %s" % lookup_name(id_64))
+            elif self.path == "/telegram-listplayers":
+                player_names = [lookup_name(p) for p in account_lookup.values()]
+                self._send_text("Tracked players:\n%s" % "\n".join(player_names))
             else:
-                logging.debug("Sending response: %s" % next_msg)
-                self._send_text("NONE")
-            next_msg = None
-            msg_lock.release()
-        elif self.path == "/telegram-latest":
-            self._send_text("queued messages: %s" % next_msg)
-        elif addplayers_re.match(self.path):
-            v = int(addplayers_re.match(self.path).group(1))
-            logging.info("adding player %s" % v)
-            k = 4294967295 & v
-            name = lookup_name(v)
-            account_lookup[k] = v
-            self._send_text("Added player: %s" % name)
-        elif removeplayers_re.match(self.path):
-            id_64 = int(removeplayers_re.match(self.path).group(1))
-            k = 4294967295 & id_64
-            account_lookup.pop(k, None)
-            self._send_text("Removed player: %s" % lookup_name(id_64))
-        elif self.path == "/telegram-listplayers":
-            player_names = [lookup_name(p) for p in account_lookup.values()]
-            self._send_text("Tracked players:\n%s" % "\n".join(player_names))
-        else:
-            self._send_text("Unknown path: %s" % self.path)
+                self._send_text("Unknown path: %s" % self.path)
+        except Exception as e:
+            self._send_text("Internal error processing: %s" % str(e))
 
     def _send_text(self, text):
         self.send_response(200)
@@ -150,7 +154,7 @@ def process_queue():
                         lookup_name(account_lookup[aid_32])
                         for aid_32 in interesting_players
                     ]
-                    message = "{players} just finished match {dotabuff_link}."\
+                    message = "{players} just finished match {dotabuff_link}"\
                         .format(
                             players=",".join(str(p) for p in player_names),
                             dotabuff_link="http://www.dotabuff.com/matches/"
