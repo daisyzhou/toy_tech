@@ -57,6 +57,28 @@ class Streamer:
         self._connection.close()
         self._aws_conn.close()
 
+    def _reconnect_connection(self, num_attempts=10):
+        """
+        Reconnect the steam API connection, because sometimes it fails...
+        Retries up to 'num_attempts' times, waiting for self.poll_interval in
+        between each retry.
+
+        Raises the socket.timeout if it times out for num_attempts times.
+
+        :param num_attempts: Number of times to attempt to retry.  Default 10.
+        """
+        try:
+            self._connection.close()
+            self._connection.connect()
+            time.sleep(self.poll_interval)
+        except socket.timeout as e:
+            if num_attempts > 1:
+                logging.warning("Reconnect failed, retrying %d more times" %
+                                (num_attempts - 1))
+                self._reconnect_connection(num_attempts - 1)
+            else:
+                raise e
+
     def _poll_continuously(self):
         """
         Loops continuously and polls if self._started = True.  Does not return
@@ -83,16 +105,12 @@ class Streamer:
             except http.client.BadStatusLine:
                 logging.info("Received empty response (BadStatusLine), "
                       "waiting & continuing...")
-                self._connection.close()
-                self._connection.connect()
-                time.sleep(self.poll_interval)
+                self._reconnect_connection()
                 continue
             except socket.timeout:
                 logging.info("Connection timed out, "
                       "waiting & continuing...")
-                self._connection.close()
-                self._connection.connect()
-                time.sleep(self.poll_interval)
+                self._reconnect_connection()
                 continue
 
             try:
@@ -102,6 +120,9 @@ class Streamer:
                     "Error while decoding JSON response: %s. Error:\n%s"
                     % (response, e)
                 )
+                continue
+            if "result" not in match_history:
+                logging.warning("JSON Malformed result: %s" % match_history)
                 continue
             if "matches" not in match_history["result"]:
                 # Reached end for now.
