@@ -17,10 +17,8 @@ import re
 import threading
 
 import dotainput.local_config
-import dotainput.stream.streamer
-
-import boto.sqs
-import boto.sqs.message
+import dotainput.streamer
+import dotainput.util
 
 
 logging.basicConfig(
@@ -30,7 +28,6 @@ logging.basicConfig(
 )
 
 
-# TODO make these not global (encapsulate this into a class)
 # Variables that need to be accessed across threads:
 # Accounts of people we care about
 default_account_ids_64bit = {
@@ -48,170 +45,184 @@ default_account_ids_64bit = {
     76561198034473797,  # lutz
     76561198168192504,  # Gilbert's smurf (vvx)
     76561197972444552,  # Angra
+    76561198089947113,  # Allen's smurf (shadow friend)
+    76561197971215286,  # shadowing
 }
 
 
-# Map of 32-bit to 64-bit account IDs
-account_lookup = dict((4294967295 & a, a) for a in default_account_ids_64bit)
+class Processor:
+    """
+    Acts as a server for requests from the lua telegram plugin.
 
+    Call the process_match method to process a match and potentially add it to
+    the messages that will be sent via telegram.
+    """
 
-# YOU NEED TO ACQUIRE THE LOCK msg_lock BEFORE READING OR MODIFYING next_msg.
-msg_lock = threading.Lock()
-next_msg = None
+    def __init__(self):
+        # Map of 32-bit to 64-bit account IDs
+        self.account_lookup = \
+            dict((4294967295 & a, a) for a in default_account_ids_64bit)
 
+        # YOU NEED TO ACQUIRE THE LOCK msg_lock TO READ/MODIFY next_msg.
+        self._msg_lock = threading.Lock()
+        self._next_msg = None
 
-# Lock for steam_conn
-conn_lock = threading.Lock()
-steam_conn = dotainput.stream.streamer.Streamer.create_steamapi_connection()
+        # Lock for steam_conn
+        self._conn_lock = threading.Lock()
+        self._steam_conn = \
+            dotainput.util.create_steamapi_connection()
 
+        self.server_address = ('', 8000)
 
-# Set up server for the LUA Telegram plugin
-class BotHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        addplayers_re = re.compile("/telegram-addplayer\?id_64=(\d+)")
-        removeplayers_re = re.compile(
-            "/telegram-removeplayer\?id_64=(\d+)"
+        class BotHandler(http.server.BaseHTTPRequestHandler):
+            """
+            HTTP Handler for requests from the telegram plugin.
+            """
+
+            def do_GET(b_self):
+                addplayers_re = re.compile("/telegram-addplayer\?id_64=(\d+)")
+                removeplayers_re = re.compile(
+                    "/telegram-removeplayer\?id_64=(\d+)"
+                )
+                try:
+                    if b_self.path == "/telegram-poll":
+                        #  Send reply back to client
+                        next_msg = self.get_next_message()
+                        if next_msg is not None:
+                            b_self._respond(next_msg)
+                        else:
+                            b_self._respond("NONE")
+                    elif b_self.path == "/telegram-latest":
+                        next_msg = self.peek_next_message()
+                        b_self._respond("Queued message: %s" % next_msg)
+                    elif addplayers_re.match(b_self.path):
+                        v = int(addplayers_re.match(b_self.path).group(1))
+                        logging.info("adding player %s" % v)
+                        k = 4294967295 & v
+                        name = self.lookup_name(v)
+                        self.account_lookup[k] = v
+                        b_self._respond("Added player: %s" % name)
+                    elif removeplayers_re.match(b_self.path):
+                        id_64 = \
+                            int(removeplayers_re.match(b_self.path).group(1))
+                        k = 4294967295 & id_64
+                        self.account_lookup.pop(k, None)
+                        b_self._respond("Removed player: %s" %
+                                        self.lookup_name(id_64))
+                    elif b_self.path == "/telegram-listplayers":
+                        print("Listing players.")
+                        player_names = [
+                            self.lookup_name(p)
+                            for p in self.account_lookup.values()]
+                        b_self._respond("Tracked players:\n%s" %
+                                      "\n".join(player_names))
+                    else:
+                        b_self._respond("Unknown path: %s" % b_self.path)
+                except Exception as e:
+                    b_self._respond("Internal error processing: %s" % str(e))
+
+            def _respond(b_self, text):
+                logging.debug("Sending response: %s" % text)
+                b_self.send_response(200)
+                b_self.send_header('Content-type', 'text/html')
+                b_self.end_headers()
+                b_self.wfile.write(bytes(text, encoding="utf-8"))
+
+        self._httpd = http.server.HTTPServer(
+            self.server_address,
+            BotHandler)
+
+    def start(self):
+        """
+        Starts the HTTP server in a different thread.  Cannot be stopped ...
+        yet.
+        """
+        threading.Thread(target=self._httpd.serve_forever).start()
+
+    def process_match(self, match):
+        """
+        Process a single match.
+
+        :param match: JSON representation of a match (from steam API).
+        """
+        players = [
+            player["account_id"]
+            for player in match["players"]
+            if "account_id" in player # Bots have no account_id
+        ]
+        interesting_players = [
+            p for p in players if p in list(self.account_lookup.keys())
+        ]
+        if len(interesting_players) > 0:
+            player_names = [
+                self.lookup_name(self.account_lookup[aid_32])
+                for aid_32 in interesting_players
+            ]
+            message = "{players} just finished match {dotabuff_link}"\
+                .format(
+                    players=",".join(str(p) for p in player_names),
+                    dotabuff_link="http://www.dotabuff.com/matches/"
+                            "{match}".format(
+                                match=match["match_id"]
+                        )
+                )
+            logging.info("Found interesting game: %s" % message)
+            self._msg_lock.acquire()
+            if self._next_msg is None:
+                self._next_msg = message
+            else:
+                self._next_msg = self._next_msg + "\n\n" + message
+            self._msg_lock.release()
+
+    def lookup_name(self, aid_64):
+        """
+        Look up the display name of a player given their 64 bit ID.
+
+        :param aid_64: 64 bit ID of player to look up.
+        :return: Player name, or "Player <aid_64>" if an error was encountered.
+        """
+        self._conn_lock.acquire()
+        self._steam_conn.request(
+            "GET",
+            "/ISteamUser/GetPlayerSummaries/v0002"
+            "?key={key}&steamids={aid_64}".format(
+                key=dotainput.local_config.DOTA2_API_KEY,
+                aid_64=aid_64
+            )
         )
         try:
-            if self.path == "/telegram-poll":
-                #  Send reply back to client
-                global msg_lock
-                global next_msg
-                msg_lock.acquire()
-                if next_msg is not None:
-                    logging.info("Sending response: %s" % next_msg)
-                    self._send_text(next_msg)
-                else:
-                    logging.debug("Sending response: %s" % next_msg)
-                    self._send_text("NONE")
-                next_msg = None
-                msg_lock.release()
-            elif self.path == "/telegram-latest":
-                self._send_text("queued messages: %s" % next_msg)
-            elif addplayers_re.match(self.path):
-                v = int(addplayers_re.match(self.path).group(1))
-                logging.info("adding player %s" % v)
-                k = 4294967295 & v
-                name = lookup_name(v)
-                account_lookup[k] = v
-                self._send_text("Added player: %s" % name)
-            elif removeplayers_re.match(self.path):
-                id_64 = int(removeplayers_re.match(self.path).group(1))
-                k = 4294967295 & id_64
-                account_lookup.pop(k, None)
-                self._send_text("Removed player: %s" % lookup_name(id_64))
-            elif self.path == "/telegram-listplayers":
-                player_names = [lookup_name(p) for p in account_lookup.values()]
-                self._send_text("Tracked players:\n%s" % "\n".join(player_names))
-            else:
-                self._send_text("Unknown path: %s" % self.path)
-        except Exception as e:
-            self._send_text("Internal error processing: %s" % str(e))
+            response = self._steam_conn.getresponse().read()
+            playerinfo = json.loads(response.decode("utf-8"))
+            players = playerinfo["response"]["players"]
+            assert len(players) == 1, "only requested one steam ID"
+            self._conn_lock.release()
+            return players[0]["personaname"]
+        except Exception as err:
+            logging.error(
+                "Got an error when looking up name for %s. Error: %s" %
+                (aid_64, str(err))
+            )
+            self._conn_lock.release()
+            self._steam_conn = \
+                dotainput.util.create_steamapi_connection()
+            return "Player number: %s" % aid_64
 
-    def _send_text(self, text):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/html')
-        self.end_headers()
-        self.wfile.write(bytes(text, encoding="utf-8"))
+    def get_next_message(self):
+        """
+        :return: The next message to be the response to telegram-poll, or None
+        if no message is to be sent.  Resets the next message to None afterward.
+        """
+        self._msg_lock.acquire()
+        response = self._next_msg
+        self._next_msg = None
+        self._msg_lock.release()
+        return response
 
-
-server_address = ('', 8000)
-httpd = http.server.HTTPServer(server_address, BotHandler)
-
-
-# Loop that listens for client.
-def listen_and_reply():
-    httpd.serve_forever()
-
-
-# Set up SQS connection
-aws_conn = boto.sqs.connect_to_region(
-    "us-west-1",
-    aws_access_key_id=dotainput.local_config.AWSAccessKeyId,
-    aws_secret_access_key=dotainput.local_config.AWSSecretKey)
-sqs_queue = aws_conn.get_queue("dota_match_ids")
-sqs_queue.set_message_class(boto.sqs.message.RawMessage)
-
-
-# Loop that processes match IDs from SQS
-def process_queue():
-    while True:
-        match_messages = sqs_queue.get_messages(10)
-        messages = []
-        for match_message in match_messages:
-            try:
-                match = json.loads(match_message.get_body())
-                players = [
-                    player["account_id"]
-                    for player in match["players"]
-                    if "account_id" in player # Bots have no account_id
-                ]
-                interesting_players = [
-                    p for p in players if p in list(account_lookup.keys())
-                ]
-                if len(interesting_players) > 0:
-                    player_names = [
-                        lookup_name(account_lookup[aid_32])
-                        for aid_32 in interesting_players
-                    ]
-                    message = "{players} just finished match {dotabuff_link}"\
-                        .format(
-                            players=",".join(str(p) for p in player_names),
-                            dotabuff_link="http://www.dotabuff.com/matches/"
-                                    "{match}".format(
-                                        match=match["match_id"]
-                                )
-                        )
-                    logging.info("Found interesting game: %s" % message)
-                    messages.append(message)
-                sqs_queue.delete_message(match_message)
-            except Exception as e:
-                logging.error("Match ID %s caused exception %s" %
-                              (str(match_message.get_body()),
-                               str(e)))
-        if len(messages) != 0:
-            global next_msg
-            global msg_lock
-            msg_lock.acquire()
-            if next_msg is None:
-                next_msg = "\n\n".join(messages)
-            else:
-                next_msg = next_msg + "\n\n" + "\n\n".join(messages)
-            msg_lock.release()
-
-
-def lookup_name(aid_64):
-    conn_lock.acquire()
-    global steam_conn
-    steam_conn.request(
-        "GET",
-        "/ISteamUser/GetPlayerSummaries/v0002"
-        "?key={key}&steamids={aid_64}".format(
-            key=dotainput.local_config.DOTA2_API_KEY,
-            aid_64=aid_64
-        )
-    )
-    try:
-        response = steam_conn.getresponse().read()
-        playerinfo = json.loads(response.decode("utf-8"))
-        players = playerinfo["response"]["players"]
-        assert len(players) == 1, "only requested one steam ID"
-        conn_lock.release()
-        return players[0]["personaname"]
-    except Exception as err:
-        logging.error("Got an error when looking up name for %s. Error: %s" %
-                      (aid_64, str(err)))
-        conn_lock.release()
-        steam_conn = \
-            dotainput.stream.streamer.Streamer.create_steamapi_connection()
-        return "Player number: %s" % aid_64
-
-
-# Main functionality (this should go in a main method ...)
-processing_thread_1 = threading.Thread(target=process_queue)
-processing_thread_2 = threading.Thread(target=process_queue)
-server_thread = threading.Thread(target=listen_and_reply)
-
-server_thread.start()
-processing_thread_1.start()
-processing_thread_2.start()
+    def peek_next_message(self):
+        """
+        :return: the next message to be sent, without resetting it to None.
+        """
+        self._msg_lock.acquire()
+        response = self._next_msg
+        self._msg_lock.release()
+        return response

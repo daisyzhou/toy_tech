@@ -1,8 +1,8 @@
 __author__ = 'daisy'
 
-from dotainput.stream import streamer
-
 import logging
+
+from dotainput import streamer
 
 logging.basicConfig(
     filename='streamer.log',

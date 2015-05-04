@@ -1,9 +1,6 @@
-__author__ = 'daisy'
-
 import dotainput.local_config
-
-import boto.sqs
-import boto.sqs.message
+import dotainput.util
+from telegram.processor import Processor
 
 import http.client
 import json
@@ -17,8 +14,7 @@ class Streamer:
     """
     Processes matches from the Dota 2 web API
     (see http://dev.dota2.com/showthread.php?t=58317 and
-    https://wiki.teamfortress.com/wiki/WebAPI#Dota_2) and transforms polling
-    requests into a stream.
+    https://wiki.teamfortress.com/wiki/WebAPI#Dota_2) and calls process on each.
 
     This class is not thread-safe.
     """
@@ -26,26 +22,21 @@ class Streamer:
     def __init__(self):
         self.running = False
         self._most_recent_streamed_match = None
+        self._processor = Processor()
 
-    def start(self, poll_interval=500):
+    def start(self, poll_interval=100):
         """
         Starts the Streamer; may not be started if it is already running.
         :param poll_interval: Number of milliseconds after which to poll for new
-          matches.  Default is 500.  Valve suggests rate limiting within
+          matches.  Default is 1000.  Valve suggests rate limiting within
           applications to at most one request per second.
-        :return:
         """
         self.running = True
-        self._aws_conn = boto.sqs.connect_to_region(
-            "us-west-1",
-            aws_access_key_id=dotainput.local_config.AWSAccessKeyId,
-            aws_secret_access_key=dotainput.local_config.AWSSecretKey)
-        self._queue = self._aws_conn.get_queue("dota_match_ids")
-        self._queue.set_message_class(boto.sqs.message.RawMessage)
-        self._connection = self.create_steamapi_connection()
+        self._connection = dotainput.util.create_steamapi_connection()
         self.poll_interval = poll_interval / 1000
         self._poll_thread = threading.Thread(target=self._poll_continuously)
         self._poll_thread.start()
+        self._processor.start()
 
     def stop(self):
         """
@@ -55,7 +46,6 @@ class Streamer:
         self.running = False
         self._poll_thread.join()
         self._connection.close()
-        self._aws_conn.close()
 
     def _reconnect_connection(self, num_attempts=10):
         """
@@ -139,19 +129,8 @@ class Streamer:
             self._most_recent_streamed_match = \
                 json_matches[-1]["match_seq_num"]
 
-            match_ids = [m["match_id"] for m in json_matches]
-
-            # Batch the matches into batches of 10 to send to SQS
-            i = 0
-            while i < len(json_matches):
-                j = 0
-                messages = []
-                while (j < 10) and (j + i < len(match_ids)):
-                    match = json_matches[i + j]
-                    messages.append((match["match_id"], json.dumps(match), 0))
-                    j += 1
-                self._queue.write_batch(messages)
-                i += j + 1
+            for match in json_matches:
+                self._processor.process_match(match)
             time.sleep(self.poll_interval)
 
     def _get_recent_match_seq_num(self):
@@ -171,10 +150,3 @@ class Streamer:
         decoded = json.loads(response.read().decode("utf-8"))
         time.sleep(self.poll_interval)  # Rate limit for the API
         return decoded["result"]["matches"][-1]["match_seq_num"]
-
-    @staticmethod
-    def create_steamapi_connection():
-        return http.client.HTTPConnection(
-            "api.steampowered.com",
-            timeout=10
-        )
