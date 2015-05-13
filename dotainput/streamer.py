@@ -47,11 +47,11 @@ class Streamer:
         self._poll_thread.join()
         self._connection.close()
 
-    def _reconnect_connection(self, num_attempts=10):
+    def _reconnect_connection(self, num_attempts=0):
         """
         Reconnect the steam API connection, because sometimes it fails...
         Retries up to 'num_attempts' times, waiting for self.poll_interval in
-        between each retry.
+        between each retry.  'num_attempts' of -1 signifies to retry forever.
 
         Raises the socket.timeout if it times out for num_attempts times.
 
@@ -62,11 +62,15 @@ class Streamer:
             self._connection.connect()
             time.sleep(self.poll_interval)
         except socket.timeout as e:
-            if num_attempts > 1:
+            if num_attempts == -1:
+                logging.warning("Reconnect failed, retrying forever.")
+                self._reconnect_connection(num_attempts=-1)
+            elif num_attempts > 1:
                 logging.warning("Reconnect failed, retrying %d more times" %
                                 (num_attempts - 1))
                 self._reconnect_connection(num_attempts - 1)
             else:
+                logging.error("Reconnect failed.")
                 raise e
 
     def _poll_continuously(self):
@@ -95,12 +99,12 @@ class Streamer:
             except http.client.BadStatusLine:
                 logging.info("Received empty response (BadStatusLine), "
                       "waiting & continuing...")
-                self._reconnect_connection()
+                self._reconnect_connection(num_attempts=-1)
                 continue
             except socket.timeout:
                 logging.info("Connection timed out, "
                       "waiting & continuing...")
-                self._reconnect_connection()
+                self._reconnect_connection(num_attempts=-1)
                 continue
 
             try:
