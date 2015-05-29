@@ -106,6 +106,9 @@ class Streamer:
                       "waiting & continuing...")
                 self._reconnect_connection(num_attempts=-1)
                 continue
+            except ConnectionResetError:
+                logging.info("Connection reset, waiting & continuing...")
+                self._reconnect_connection(num_attempts=-1)
 
             try:
                 match_history = json.loads(response.decode("utf-8"))
