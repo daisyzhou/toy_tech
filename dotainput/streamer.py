@@ -61,7 +61,8 @@ class Streamer:
             self._connection.close()
             self._connection.connect()
             time.sleep(self.poll_interval)
-        except socket.timeout as e:
+        # Except all exceptions... I don't have time for this
+        except (socket.timeout, ConnectionRefusedError, Exception) as e:
             if num_attempts == -1:
                 logging.warning("Reconnect failed, retrying forever.")
                 self._reconnect_connection(num_attempts=-1)
