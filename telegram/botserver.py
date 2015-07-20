@@ -13,12 +13,13 @@
 import http.server
 import json
 import logging
-import re
 import threading
+import urllib.parse
 
 import dotainput.local_config
 import dotainput.streamer
 import dotainput.util
+from telegram.bot_api import BotApi
 
 
 logging.basicConfig(
@@ -46,97 +47,111 @@ default_account_ids_64bit = {
     76561198168192504,  # Gilbert's smurf (vvx)
     76561197972444552,  # Angra
     76561198089947113,  # Allen's smurf (shadow friend)
-    76561197971215286,  # shadowing
 }
 
 
-class Processor:
-    """
-    Acts as a server for requests from the lua telegram plugin.
+GLIMPSE_CHAT_ID = 8999690
 
-    Call the process_match method to process a match and potentially add it to
-    the messages that will be sent via telegram.
+
+class BotServer:
+    """
+    Acts as a server for commands sent from the Telegram chats, and maintains
+    the state for the bot (tracked players).
     """
 
     def __init__(self):
-        # Map of 32-bit to 64-bit account IDs
+        print('Initializing server...')
+        # Map of 32-bit to 64-bit account IDs for Glimpse chat.
         self.account_lookup = \
             dict((4294967295 & a, a) for a in default_account_ids_64bit)
 
-        # YOU NEED TO ACQUIRE THE LOCK msg_lock TO READ/MODIFY next_msg.
-        self._msg_lock = threading.Lock()
-        self._next_msg = None
-
         # Lock for steam_conn
-        self._conn_lock = threading.Lock()
+        self._steam_conn_lock = threading.Lock()
         self._steam_conn = \
             dotainput.util.create_steamapi_connection()
 
-        self.server_address = ('', 8000)
+        self._updatehandler_port = 443
+        self.server_address = ('', self._updatehandler_port)
 
-        class BotHandler(http.server.BaseHTTPRequestHandler):
+        class UpdateHandler(http.server.BaseHTTPRequestHandler):
             """
             HTTP Handler for requests from the telegram plugin.
             """
+            def do_POST(b_self):
+                print('POST RECEIVED')
+                length = int(b_self.headers["Content-Length"])
+                post_data = urllib.parse.parse_qs(
+                    b_self.rfile.read(length).decode("utf-8")
+                )
+                chat = post_data["chat"]
+                text = post_data["text"]
+                print(chat, text)
+                if text.starts_with("/help"):
+                    print("HI")
 
             def do_GET(b_self):
-                addplayers_re = re.compile("/telegram-addplayer\?id_64=(\d+)")
-                removeplayers_re = re.compile(
-                    "/telegram-removeplayer\?id_64=(\d+)"
-                )
-                try:
-                    if b_self.path == "/telegram-poll":
-                        #  Send reply back to client
-                        next_msg = self.get_next_message()
-                        if next_msg is not None:
-                            b_self._respond(next_msg)
-                        else:
-                            b_self._respond("NONE")
-                    elif b_self.path == "/telegram-latest":
-                        next_msg = self.peek_next_message()
-                        b_self._respond("Queued message: %s" % next_msg)
-                    elif addplayers_re.match(b_self.path):
-                        v = int(addplayers_re.match(b_self.path).group(1))
-                        logging.info("adding player %s" % v)
-                        k = 4294967295 & v
-                        name = self.lookup_name(v)
-                        self.account_lookup[k] = v
-                        b_self._respond("Added player: %s" % name)
-                    elif removeplayers_re.match(b_self.path):
-                        id_64 = \
-                            int(removeplayers_re.match(b_self.path).group(1))
-                        k = 4294967295 & id_64
-                        self.account_lookup.pop(k, None)
-                        b_self._respond("Removed player: %s" %
-                                        self.lookup_name(id_64))
-                    elif b_self.path == "/telegram-listplayers":
-                        print("Listing players.")
-                        player_names = [
-                            self.lookup_name(p)
-                            for p in self.account_lookup.values()]
-                        b_self._respond("Tracked players:\n%s" %
-                                      "\n".join(player_names))
-                    else:
-                        b_self._respond("Unknown path: %s" % b_self.path)
-                except Exception as e:
-                    b_self._respond("Internal error processing: %s" % str(e))
+                print('GET???!?')
 
-            def _respond(b_self, text):
-                logging.debug("Sending response: %s" % text)
-                b_self.send_response(200)
-                b_self.send_header('Content-type', 'text/html')
-                b_self.end_headers()
-                b_self.wfile.write(bytes(text, encoding="utf-8"))
+            def do_HEAD(b_self):
+                print('HEAD??!?')
+
+            # TODO (dz) this method is old, remove it
+            # def do_GET(b_self):
+            #     addplayers_re = re.compile("/telegram-addplayer\?id_64=(\d+)")
+            #     removeplayers_re = re.compile(
+            #         "/telegram-removeplayer\?id_64=(\d+)"
+            #     )
+            #     try:
+            #         if b_self.path == "/telegram-poll":
+            #             #  Send reply back to client
+            #             next_msg = self.get_next_message()
+            #             if next_msg is not None:
+            #                 b_self._respond(next_msg)
+            #             else:
+            #                 b_self._respond("NONE")
+            #         elif b_self.path == "/telegram-latest":
+            #             next_msg = self.peek_next_message()
+            #             b_self._respond("Queued message: %s" % next_msg)
+            #         elif addplayers_re.match(b_self.path):
+            #             v = int(addplayers_re.match(b_self.path).group(1))
+            #             logging.info("adding player %s" % v)
+            #             k = 4294967295 & v
+            #             name = self.lookup_name(v)
+            #             self.account_lookup[k] = v
+            #             b_self._respond("Added player: %s" % name)
+            #         elif removeplayers_re.match(b_self.path):
+            #             id_64 = \
+            #                 int(removeplayers_re.match(b_self.path).group(1))
+            #             k = 4294967295 & id_64
+            #             self.account_lookup.pop(k, None)
+            #             b_self._respond("Removed player: %s" %
+            #                             self.lookup_name(id_64))
+            #         elif b_self.path == "/telegram-listplayers":
+            #             print("Listing players.")
+            #             player_names = [
+            #                 self.lookup_name(p)
+            #                 for p in self.account_lookup.values()]
+            #             b_self._respond("Tracked players:\n%s" %
+            #                           "\n".join(player_names))
+            #         else:
+            #             b_self._respond("Unknown path: %s" % b_self.path)
+            #     except Exception as e:
+            #         b_self._respond("Internal error processing: %s" % str(e))
 
         self._httpd = http.server.HTTPServer(
             self.server_address,
-            BotHandler)
+            UpdateHandler
+        )
+
+        self._bot_api = BotApi()
 
     def start(self):
         """
-        Starts the HTTP server in a different thread.  Cannot be stopped ...
-        yet.
+        Register webhooks for commands from chat, and start the server to
+        receive them (See BotHandler).
         """
+        target_url = '45.55.20.153:%s' % self._updatehandler_port
+        self._bot_api.create_webhook(target_url)
         threading.Thread(target=self._httpd.serve_forever).start()
 
     def process_match(self, match):
@@ -167,12 +182,7 @@ class Processor:
                         )
                 )
             logging.info("Found interesting game: %s" % message)
-            self._msg_lock.acquire()
-            if self._next_msg is None:
-                self._next_msg = message
-            else:
-                self._next_msg = self._next_msg + "\n\n" + message
-            self._msg_lock.release()
+            self._bot_api.send_message(message)
 
     def lookup_name(self, aid_64):
         """
@@ -181,7 +191,7 @@ class Processor:
         :param aid_64: 64 bit ID of player to look up.
         :return: Player name, or "Player <aid_64>" if an error was encountered.
         """
-        self._conn_lock.acquire()
+        self._steam_conn_lock.acquire()
         self._steam_conn.request(
             "GET",
             "/ISteamUser/GetPlayerSummaries/v0002"
@@ -195,34 +205,14 @@ class Processor:
             playerinfo = json.loads(response.decode("utf-8"))
             players = playerinfo["response"]["players"]
             assert len(players) == 1, "only requested one steam ID"
-            self._conn_lock.release()
+            self._steam_conn_lock.release()
             return players[0]["personaname"]
         except Exception as err:
             logging.error(
                 "Got an error when looking up name for %s. Error: %s" %
                 (aid_64, str(err))
             )
-            self._conn_lock.release()
+            self._steam_conn_lock.release()
             self._steam_conn = \
                 dotainput.util.create_steamapi_connection()
             return "Player number: %s" % aid_64
-
-    def get_next_message(self):
-        """
-        :return: The next message to be the response to telegram-poll, or None
-        if no message is to be sent.  Resets the next message to None afterward.
-        """
-        self._msg_lock.acquire()
-        response = self._next_msg
-        self._next_msg = None
-        self._msg_lock.release()
-        return response
-
-    def peek_next_message(self):
-        """
-        :return: the next message to be sent, without resetting it to None.
-        """
-        self._msg_lock.acquire()
-        response = self._next_msg
-        self._msg_lock.release()
-        return response

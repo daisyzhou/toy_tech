@@ -1,6 +1,6 @@
 import dotainput.local_config
 import dotainput.util
-from telegram.processor import Processor
+from telegram.botserver import BotServer
 
 import http.client
 import json
@@ -22,7 +22,7 @@ class Streamer:
     def __init__(self):
         self.running = False
         self._most_recent_streamed_match = None
-        self._processor = Processor()
+        self._processor = BotServer()
 
     def start(self, poll_interval=100):
         """
