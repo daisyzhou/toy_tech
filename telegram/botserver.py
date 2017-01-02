@@ -21,6 +21,9 @@ import dotainput.streamer
 import dotainput.util
 from telegram.bot_api import BotApi
 
+import tornado.ioloop
+import tornado.web
+
 
 logging.basicConfig(
     filename='processor.log',
@@ -53,6 +56,16 @@ default_account_ids_64bit = {
 GLIMPSE_CHAT_ID = 8999690
 
 
+class UpdateHandler(tornado.web.RequestHandler):
+    def post(self, *args, **kwargs):
+        print('POST RECEIVED')
+        self.write("Hello, world")
+
+    def get(self):
+        print('GET RECEIVED')
+        self.write("Goodbye, world")
+
+
 class BotServer:
     """
     Acts as a server for commands sent from the Telegram chats, and maintains
@@ -73,75 +86,9 @@ class BotServer:
         self._updatehandler_port = 443
         self.server_address = ('', self._updatehandler_port)
 
-        class UpdateHandler(http.server.BaseHTTPRequestHandler):
-            """
-            HTTP Handler for requests from the telegram plugin.
-            """
-            def do_POST(b_self):
-                print('POST RECEIVED')
-                length = int(b_self.headers["Content-Length"])
-                post_data = urllib.parse.parse_qs(
-                    b_self.rfile.read(length).decode("utf-8")
-                )
-                chat = post_data["chat"]
-                text = post_data["text"]
-                print(chat, text)
-                if text.starts_with("/help"):
-                    print("HI")
-
-            def do_GET(b_self):
-                print('GET???!?')
-
-            def do_HEAD(b_self):
-                print('HEAD??!?')
-
-            # TODO (dz) this method is old, remove it
-            # def do_GET(b_self):
-            #     addplayers_re = re.compile("/telegram-addplayer\?id_64=(\d+)")
-            #     removeplayers_re = re.compile(
-            #         "/telegram-removeplayer\?id_64=(\d+)"
-            #     )
-            #     try:
-            #         if b_self.path == "/telegram-poll":
-            #             #  Send reply back to client
-            #             next_msg = self.get_next_message()
-            #             if next_msg is not None:
-            #                 b_self._respond(next_msg)
-            #             else:
-            #                 b_self._respond("NONE")
-            #         elif b_self.path == "/telegram-latest":
-            #             next_msg = self.peek_next_message()
-            #             b_self._respond("Queued message: %s" % next_msg)
-            #         elif addplayers_re.match(b_self.path):
-            #             v = int(addplayers_re.match(b_self.path).group(1))
-            #             logging.info("adding player %s" % v)
-            #             k = 4294967295 & v
-            #             name = self.lookup_name(v)
-            #             self.account_lookup[k] = v
-            #             b_self._respond("Added player: %s" % name)
-            #         elif removeplayers_re.match(b_self.path):
-            #             id_64 = \
-            #                 int(removeplayers_re.match(b_self.path).group(1))
-            #             k = 4294967295 & id_64
-            #             self.account_lookup.pop(k, None)
-            #             b_self._respond("Removed player: %s" %
-            #                             self.lookup_name(id_64))
-            #         elif b_self.path == "/telegram-listplayers":
-            #             print("Listing players.")
-            #             player_names = [
-            #                 self.lookup_name(p)
-            #                 for p in self.account_lookup.values()]
-            #             b_self._respond("Tracked players:\n%s" %
-            #                           "\n".join(player_names))
-            #         else:
-            #             b_self._respond("Unknown path: %s" % b_self.path)
-            #     except Exception as e:
-            #         b_self._respond("Internal error processing: %s" % str(e))
-
-        self._httpd = http.server.HTTPServer(
-            self.server_address,
-            UpdateHandler
-        )
+        self._application = tornado.web.Application([
+            (r"/", UpdateHandler),
+        ])
 
         self._bot_api = BotApi()
 
@@ -150,9 +97,13 @@ class BotServer:
         Register webhooks for commands from chat, and start the server to
         receive them (See BotHandler).
         """
+        print('Starting botserver...')
         target_url = '45.55.20.153:%s' % self._updatehandler_port
         self._bot_api.create_webhook(target_url)
-        threading.Thread(target=self._httpd.serve_forever).start()
+
+        self._application.listen(self._updatehandler_port)
+        tornado.ioloop.IOLoop.current().start()
+        print('updatehandler started')
 
     def process_match(self, match):
         """
